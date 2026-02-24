@@ -1,41 +1,46 @@
 import discord
+from discord.ext import commands, tasks
 import os
-from discord.ext import commands
-import bingx_client  # Убедись, что этот файл есть в репозитории!
+import bingx_client
+import asyncio
+from datetime import datetime, timedelta
 
-# 1. Загрузка токена
 TOKEN = os.getenv('DISCORD_TOKEN')
 
-# 2. Настройка бота
 intents = discord.Intents.default()
-intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 @bot.event
 async def on_ready():
-    print(f'Бот ожил! Зашел как {bot.user}')
+    print(f'Бот-трейдер запущен! Актив: CYS-USDT')
+    if not auto_trade_loop.is_running():
+        auto_trade_loop.start()
 
-# Команда №1: Проверка связи
-@bot.command()
-async def привет(ctx):
-    await ctx.send('Привет! Я на связи и готов к работе.')
+@tasks.loop(seconds=10)  # Проверяем время каждые 10 секунд
+async def auto_trade_loop():
+    now = datetime.now()
+    
+    # Проверяем, наступил ли момент: 00, 15, 30 или 45 минут + 2 секунды
+    if now.minute in [0, 15, 30, 45] and now.second == 2:
+        print(f"--- Сигнал! Время: {now.strftime('%H:%M:%S')} ---")
+        
+        # 1. Запрашиваем анализ стратегии
+        decision, reason = bingx_client.check_strategy()
+        print(f"Результат анализа: {decision} ({reason})")
+        
+        if decision == "BUY":
+            # 2. Открываем ордер на 5 USDT
+            order_res = bingx_client.open_long_5usd("CYS-USDT")
+            
+            # Логируем результат в консоль и (по желанию) в Дискорд
+            print(f"Ордер отправлен: {order_res}")
+            
+            # Находим канал, куда бот пришлет отчет (замени на свой ID или удали)
+            # channel = bot.get_channel(ID_ТВОЕГО_КАНАЛА)
+            # if channel: await channel.send(f"✅ Вход в лонг CYS-USDT! Ответ: {order_res}")
+        
+        # Чтобы бот не сработал несколько раз в одну и ту же секунду
+        await asyncio.sleep(5)
 
-# Команда №2: Проверка баланса
-@bot.command()
-async def баланс(ctx):
-    res = bingx_client.get_balance()
-    if res.get("code") == 0:
-        data = res.get("data", {}).get("balance", {})
-        val = data.get("balance", "0")
-        await ctx.send(f"💰 Баланс: **{val} USDT**")
-    else:
-        await ctx.send(f"❌ Ошибка: {res.get('msg')}")
-
-# Команда №3: Та самая диагностика ключей
-@bot.command()
-async def тест_ключей(ctx):
-    info = bingx_client.debug_keys()
-    await ctx.send(info)
-
-# 3. Запуск
+# Запуск бота
 bot.run(TOKEN)
