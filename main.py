@@ -1,1 +1,1 @@
-
+bot.run(TOKEN)
