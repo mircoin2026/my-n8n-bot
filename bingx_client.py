@@ -14,72 +14,85 @@ URL = "https://open-api.bingx.com"
 def get_signature(query_string):
     return hmac.new(SECRET_KEY.encode('utf-8'), query_string.encode('utf-8'), hashlib.sha256).hexdigest()
 
-# 1. Получение свечей (15м)
-def get_candles(symbol="CYS-USDT", limit=50):
+def get_candles(symbol="CYS-USDT"):
     path = "/openApi/swap/v3/quote/klines"
-    params = {"symbol": symbol, "interval": "15m", "limit": limit}
-    res = requests.get(URL + path, params=params)
-    data = res.json()
-    if data.get("code") == 0:
-        df = pd.DataFrame(data["data"], columns=['time', 'open', 'high', 'low', 'close', 'volume'])
-        df[['open', 'high', 'low', 'close']] = df[['open', 'high', 'low', 'close']].astype(float)
-        return df
+    # Берем 31 свечу: 30 для анализа + 1 текущая (которую отбросим)
+    params = {"symbol": symbol, "interval": "15m", "limit": 31}
+    try:
+        res = requests.get(URL + path, params=params)
+        data = res.json()
+        if data.get("code") == 0:
+            df = pd.DataFrame(data["data"], columns=['time', 'open', 'high', 'low', 'close', 'volume'])
+            df[['open', 'high', 'low', 'close']] = df[['open', 'high', 'low', 'close']].astype(float)
+            return df
+    except:
+        return None
     return None
 
-# 2. Открытие сделки (Market Long)
-def place_market_order(symbol, side, amount):
-    path = "/openApi/swap/v2/trade/order"
-    timestamp = int(time.time() * 1000)
-    params = {
-        "symbol": symbol,
-        "side": side,          # "BUY" для Long
-        "positionSide": "LONG",
-        "type": "MARKET",
-        "quantity": amount,    # Кол-во монет (нужно будет рассчитать от 5$)
-        "timestamp": timestamp,
-        "apiKey": API_KEY
-    }
-    query_string = urlencode(dict(sorted(params.items())))
-    signature = get_signature(query_string)
-    url = f"{URL}{path}?{query_string}&signature={signature}"
-    headers = {"X-BX-APIKEY": API_KEY}
-    res = requests.post(url, headers=headers)
-    return res.json()
-
-# 3. Сама стратегия (Логика из Pine Script)
 def check_strategy():
     df = get_candles()
-    if df is None or len(df) < 31: return "Ошибка данных"
+    if df is None or len(df) < 31: 
+        return "WAIT", "Данных меньше 30"
     
-    # Берем данные (убираем текущую незаконченную свечу)
-    closed_df = df.iloc[:-1].copy()
+    # Отбрасываем текущую незакрытую свечу
+    closed_df = df.iloc[:-1].copy() 
+    
+    # Последняя закрытая свеча для проверки условий
     last_candle = closed_df.iloc[-1]
-    prev_candles = closed_df.iloc[-31:-1] # Lookback 30
-
-    # Расчет уровней L1-L5
-    l5 = prev_candles['high'].max()
-    l1 = prev_candles['low'].min()
-    l3 = (l5 + l1) / 2
-    l2 = (l1 + l3) / 2
-    l4 = (l5 + l3) / 2
-    levels = [l1, l2, l3, l4, l5]
+    
+    # Lookback ровно 30 свечей ПЕРЕД последней закрытой
+    # (То есть те самые 30 свечей, на основе которых строятся уровни)
+    lookback_df = closed_df.iloc[-30:] 
+    
+    # УРОВНИ L1-L5
+    L5 = lookback_df['high'].max()
+    L1 = lookback_df['low'].min()
+    L3 = (L5 + L1) / 2
+    L2 = (L1 + L3) / 2
+    L4 = (L5 + L3) / 2
+    levels = [L1, L2, L3, L4, L5]
 
     # EMA 9
-    ema9 = ta.ema(closed_df['close'], length=9).iloc[-1]
+    ema_series = ta.ema(closed_df['close'], length=9)
+    ema9 = ema_series.iloc[-1]
 
     # Параметры свечи
-    c_open = last_candle['open']
-    c_close = last_candle['close']
-    c_high = last_candle['high']
-    body = abs(c_close - c_open)
-    upper_wick = c_high - max(c_open, c_close)
-    is_green = c_close > c_open
+    o = last_candle['open']
+    c = last_candle['close']
+    h = last_candle['high']
+    body = abs(c - o)
+    upper_wick = h - max(o, c)
+    is_green = c > o
 
-    # Условия
-    is_level_broken = any(c_open < lvl < c_close for lvl in levels)
-    ema_broken = c_open < ema9 < c_close
-    wick_ok = upper_wick <= (body * 0.30)
+    # УСЛОВИЯ (Как в Pine Script)
+    is_level_broken = any(o < lvl < c for lvl in levels)
+    is_ema_broken = o < ema9 < c
+    is_wick_ok = upper_wick <= (body * 0.30)
 
-    if is_green and is_level_broken and ema_broken and wick_ok and body > 0:
-        return "BUY"
-    return "WAIT"
+    if is_green and is_level_broken and is_ema_broken and is_wick_ok and body > 0:
+        return "BUY", "Условия выполнены"
+    
+    return "WAIT", "Нет сигнала"
+
+def open_long_5usd(symbol="CYS-USDT"):
+    # Получаем актуальную цену для расчета количества
+    df = get_candles(symbol)
+    price = df.iloc[-1]['close']
+    qty = round(5.0 / price, 0) # Округляем до целого числа монет
+
+    params = {
+        "symbol": symbol,
+        "side": "BUY",
+        "positionSide": "LONG",
+        "type": "MARKET",
+        "quantity": qty,
+        "timestamp": int(time.time() * 1000),
+        "apiKey": API_KEY
+    }
+    
+    query_string = urlencode(dict(sorted(params.items())))
+    signature = get_signature(query_string)
+    headers = {"X-BX-APIKEY": API_KEY}
+    
+    res = requests.post(f"{URL}/openApi/swap/v2/trade/order?{query_string}&signature={signature}", headers=headers)
+    return res.json()
