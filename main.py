@@ -1,6 +1,23 @@
+import os
+import sys
+import subprocess
+
+# --- АВТО-УСТАНОВКА БИБЛИОТЕК (ЕСЛИ ХОСТИНГ ТУПИТ) ---
+def install_packages():
+    try:
+        import pandas
+        import pandas_ta
+    except ImportError:
+        print("Библиотеки не найдены. Начинаю принудительную установку...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "pandas", "pandas_ta", "requests", "discord.py", "python-dotenv"])
+        print("Установка завершена! Перезапускаю код...")
+        os.execv(sys.executable, ['python'] + sys.argv)
+
+install_packages()
+
+# --- ТЕПЕРЬ ОСНОВНОЙ КОД ---
 import discord
 from discord.ext import commands, tasks
-import os
 import hmac
 import time
 import hashlib
@@ -21,7 +38,6 @@ SYMBOL = "CYS-USDT"
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# --- ФУНКЦИИ BINGX ---
 def get_signature(query_string):
     return hmac.new(SECRET_KEY.encode('utf-8'), query_string.encode('utf-8'), hashlib.sha256).hexdigest()
 
@@ -40,10 +56,9 @@ def get_candles():
 
 def open_long_5usd():
     df = get_candles()
-    if df is None: return "Ошибка получения цены"
+    if df is None: return "Ошибка цены"
     price = df.iloc[-1]['close']
     qty = round(5.0 / price, 0)
-    
     params = {
         "symbol": SYMBOL, "side": "BUY", "positionSide": "LONG",
         "type": "MARKET", "quantity": qty,
@@ -51,57 +66,43 @@ def open_long_5usd():
     }
     query_string = urlencode(dict(sorted(params.items())))
     signature = get_signature(query_string)
-    headers = {"X-BX-APIKEY": API_KEY}
-    res = requests.post(f"{URL}/openApi/swap/v2/trade/order?{query_string}&signature={signature}", headers=headers)
+    res = requests.post(f"{URL}/openApi/swap/v2/trade/order?{query_string}&signature={signature}", 
+                        headers={"X-BX-APIKEY": API_KEY})
     return res.json()
 
-# --- СТРАТЕГИЯ (ТВОЯ, БЕЗ ИЗМЕНЕНИЙ) ---
 def check_strategy():
     df = get_candles()
     if df is None or len(df) < 31: return False, "Мало данных"
-    
     closed_df = df.iloc[:-1].copy()
     last_candle = closed_df.iloc[-1]
-    lookback_df = closed_df.iloc[-30:] # Твои 30 свечей
+    lookback_df = closed_df.iloc[-30:] # Lookback 30
     
-    L5 = lookback_df['high'].max()
-    L1 = lookback_df['low'].min()
+    L5, L1 = lookback_df['high'].max(), lookback_df['low'].min()
     L3 = (L5 + L1) / 2
-    L2 = (L1 + L3) / 2
-    L4 = (L5 + L3) / 2
+    L2, L4 = (L1 + L3) / 2, (L5 + L3) / 2
     levels = [L1, L2, L3, L4, L5]
-
     ema9 = ta.ema(closed_df['close'], length=9).iloc[-1]
-
     o, c, h = last_candle['open'], last_candle['close'], last_candle['high']
     body = abs(c - o)
-    upper_wick = h - max(o, c)
-    
     is_green = c > o
     level_broken = any(o < lvl < c for lvl in levels)
     ema_broken = o < ema9 < c
-    wick_ok = upper_wick <= (body * 0.30)
-
+    wick_ok = (h - max(o, c)) <= (body * 0.30)
     if is_green and level_broken and ema_broken and wick_ok and body > 0:
-        return True, "СИГНАЛ НА ПОКУПКУ"
+        return True, "СИГНАЛ"
     return False, "Нет условий"
 
-# --- ЦИКЛ РАБОТЫ ---
-@tasks.loop(seconds=1) # Проверяем каждую секунду, чтобы не пропустить 02 сек
+@tasks.loop(seconds=1)
 async def main_loop():
     now = datetime.now()
-    
-    # Срабатывает ровно в 00, 15, 30, 45 минут и 2 секунды
     if now.minute in [0, 15, 30, 45] and now.second == 2:
-        print(f"--- АНАЛИЗ СВЕЧИ {now.strftime('%H:%M:%S')} ---")
+        print(f"--- АНАЛИЗ {now.strftime('%H:%M:%S')} ---")
         signal, reason = check_strategy()
-        print(f"Результат: {reason}")
-        
         if signal:
-            res = open_long_5usd()
-            print(f"Ордер: {res}")
-        
-        await asyncio.sleep(2) # Пауза, чтобы не сработало дважды в одну секунду
+            print(f"ВХОД: {open_long_5usd()}")
+        else:
+            print(f"Пропуск: {reason}")
+        await asyncio.sleep(2)
 
 @bot.event
 async def on_ready():
@@ -112,4 +113,3 @@ async def on_ready():
         main_loop.start()
 
 bot.run(TOKEN)
-
