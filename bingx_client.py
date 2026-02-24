@@ -3,7 +3,6 @@ import time
 import hashlib
 import requests
 import os
-from urllib.parse import urlencode
 
 API_KEY = os.getenv('BINGX_API_KEY')
 SECRET_KEY = os.getenv('BINGX_SECRET_KEY')
@@ -12,30 +11,27 @@ URL = "https://open-api.bingx.com"
 def get_balance():
     path = "/openApi/swap/v2/user/balance"
     
-    # 1. Создаем параметры
+    # BingX V2 требует только timestamp в параметрах для баланса
     params = {
-        "timestamp": int(time.time() * 1000),
-        "apiKey": API_KEY
+        "timestamp": int(time.time() * 1000)
     }
     
-    # 2. Формируем строку запроса (Query String)
-    # urlencode гарантирует, что все символы будут правильными
-    query_string = urlencode(params)
+    # 1. Склеиваем параметры в строку: "timestamp=12345678"
+    query_string = f"timestamp={params['timestamp']}"
     
-    # 3. Создаем подпись (HMAC SHA256)
+    # 2. Создаем подпись ТАК, как просит документация V2
     signature = hmac.new(
         SECRET_KEY.encode('utf-8'), 
         query_string.encode('utf-8'), 
         hashlib.sha256
     ).hexdigest()
     
-    # 4. Собираем полный URL
+    # 3. Собираем финальный URL
     full_url = f"{URL}{path}?{query_string}&signature={signature}"
     
-    # 5. Заголовки (BingX просит передавать ключ здесь)
+    # 4. Ключ передаем ТОЛЬКО в заголовке
     headers = {
-        "X-BX-APIKEY": API_KEY,
-        "Content-Type": "application/json"
+        "X-BX-APIKEY": API_KEY
     }
     
     try:
@@ -44,8 +40,8 @@ def get_balance():
     except Exception as e:
         return {"code": -1, "msg": str(e)}
 
-# Эту функцию оставляем для диагностики
 def debug_keys():
+    # Проверка на наличие пустых строк или пробелов, которые мы не видим
     api = os.getenv('BINGX_API_KEY', '')
     sec = os.getenv('BINGX_SECRET_KEY', '')
-    return f"Ключи в системе: \nAPI: {len(api)} симв. \nSEC: {len(sec)} симв."
+    return f"Статус ключей:\nAPI: {len(api)} симв.\nSEC: {len(sec)} симв."
