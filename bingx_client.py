@@ -1,34 +1,17 @@
-import hmac
-import time
-import hashlib
-import requests
 import os
 
-API_KEY = os.getenv('BINGX_API_KEY')
-SECRET_KEY = os.getenv('BINGX_SECRET_KEY')
-URL = "https://open-api.bingx.com"
-
-def get_balance():
-    path = "/openApi/swap/v2/user/balance"
-    # Важно: BingX требует строгого порядка и чистоты строк
-    timestamp = str(int(time.time() * 1000))
-    params_str = f"apiKey={API_KEY}&timestamp={timestamp}"
+def debug_keys():
+    api_key = os.getenv('BINGX_API_KEY')
+    sec_key = os.getenv('BINGX_SECRET_KEY')
     
-    # Создаем подпись
-    signature = hmac.new(
-        SECRET_KEY.encode("utf-8"), 
-        params_str.encode("utf-8"), 
-        hashlib.sha256
-    ).hexdigest()
+    # Проверяем, не пустые ли они
+    if not api_key or not sec_key:
+        return "❌ Ключи вообще не найдены в настройках хостинга!"
     
-    url = f"{URL}{path}?{params_str}&signature={signature}"
-    headers = {"X-BX-APIKEY": API_KEY}
+    # Проверяем длину (стандартный Secret обычно около 40+ символов)
+    # И проверяем на наличие пробелов
+    res = f"Ключи найдены! \nДлина API Key: {len(api_key)}\nДлина Secret: {len(sec_key)}"
+    if api_key.strip() != api_key or sec_key.strip() != sec_key:
+        res += "\n⚠️ ВНИМАНИЕ: В ключах обнаружены лишние пробелы в начале или конце!"
     
-    response = requests.get(url, headers=headers)
-    return response.json()
-
-def check_server_time():
-    # Простейший способ проверить связь с биржей без ключей
-    path = "/openApi/swap/v2/server/time"
-    res = requests.get(f"{URL}{path}")
-    return res.json()
+    return res
